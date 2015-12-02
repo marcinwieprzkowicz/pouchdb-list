@@ -18,7 +18,7 @@
 "use strict";
 
 var extend = _dereq_("extend");
-var render = _dereq_("couchdb-render");
+var coucheval = _dereq_("couchdb-eval");
 var PouchPluginError = _dereq_("pouchdb-plugin-error");
 
 exports.list = function (listPath, options, callback) {
@@ -81,18 +81,14 @@ function offlineQuery(db, designDocName, listName, viewName, options) {
     return args;
 
   }).then(Function.prototype.apply.bind(function (viewResp, info, designDoc) {
-    var head = {
-      offset: viewResp.offset,
-      total_rows: viewResp.total_rows,
-      update_seq: info.update_seq
-    };
-
     var respInfo;
     var chunks = [];
+    var result;
+    var rows = viewResp.rows;
 
     var listApi = {
       getRow: function () {
-        return viewResp.rows.shift() || null;
+        return rows.shift() || null;
       },
       send: function (chunk) {
         listApi.start({});
@@ -105,213 +101,18 @@ function offlineQuery(db, designDocName, listName, viewName, options) {
       }
     };
 
-     // fake request object
-    var req = {
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      },
-      query: {}
-    };
-    var resp = render(designDoc.lists[listName], designDoc, head, req, listApi);
-    if (respInfo) {
-      extend(resp, respInfo);
-      resp.body = chunks.join("") + resp.body;
-      resp.headers["Transfer-Encoding"] = "chunked";
-    }
-    return resp;
-  }, null));
-}
-
-},{"couchdb-render":2,"extend":6,"pouchdb-plugin-error":7}],2:[function(_dereq_,module,exports){
-/*
-	Copyright 2013-2014, Marten de Vries
-
-	Licensed under the Apache License, Version 2.0 (the "License");
-	you may not use this file except in compliance with the License.
-	You may obtain a copy of the License at
-
-	http://www.apache.org/licenses/LICENSE-2.0
-
-	Unless required by applicable law or agreed to in writing, software
-	distributed under the License is distributed on an "AS IS" BASIS,
-	WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	See the License for the specific language governing permissions and
-	limitations under the License.
-*/
-
-"use strict";
-
-var extend = _dereq_("extend");
-var isEmpty = _dereq_("is-empty");
-
-var coucheval = _dereq_("couchdb-eval");
-var completeRespObj = _dereq_("couchdb-resp-completer");
-var PouchPluginError = _dereq_("pouchdb-plugin-error");
-
-function isObject(value) {
-  return Object.prototype.toString.call(value) === "[object Object]";
-}
-
-module.exports = function render(source, designDoc, data, req, extraVars) {
-  /*jshint evil: true */
-  if (!extraVars) {
-    extraVars = {};
-  }
-  var providesCtx = buildProvidesCtx();
-  extend(extraVars, providesCtx.api);
-  var func = coucheval.evaluate(designDoc, extraVars, source);
-
-  var result, contentType;
-  try {
-    result = func.call(designDoc, data, req);
-  } catch (e) {
-    throw coucheval.wrapExecutionError(e);
-  }
-  if (!(typeof result === "string" || isObject(result))) {
-    var resp = providesCtx.getResult(req);
-    result = resp[0];
-    contentType = resp[1];
-  }
-
-  return completeRespObj(result, contentType);
-};
-
-function buildProvidesCtx() {
-  var providesFuncs = {};
-  var types = [];
-
-  function registerType(key) {
-    //signature: key, *mimes
-    var mimes = Array.prototype.slice.call(arguments, 1);
-    types.push([key, mimes]);
-  }
-  registerType("all", "*/*");
-  registerType("text", "text/plain; charset=utf-8", "txt");
-  registerType("html", "text/html; charset=utf-8");
-  registerType("xhtml", "application/xhtml+xml", "xhtml");
-  registerType("xml", "application/xml", "text/xml", "application/x-xml");
-  registerType("js", "text/javascript", "application/javascript", "application/x-javascript");
-  registerType("css", "text/css");
-  registerType("ics", "text/calendar");
-  registerType("csv", "text/csv");
-  registerType("rss", "application/rss+xml");
-  registerType("atom", "application/atom+xml");
-  registerType("yaml", "application/x-yaml", "text/yaml");
-  registerType("multipart_form", "multipart/form-data");
-  registerType("url_encoded_form", "application/x-www-form-urlencoded");
-  registerType("json", "application/json", "text/x-json");
-
-  function execute(type) {
+    var func = coucheval.evaluate(designDoc, listApi, designDoc.lists[listName]);
     try {
-      return providesFuncs[type]();
+      result = func.call(designDoc);
     } catch (e) {
       throw coucheval.wrapExecutionError(e);
     }
-  }
 
-  function getRelevantTypes() {
-    return types.filter(function (type) {
-      return providesFuncs.hasOwnProperty(type[0]);
-    });
-  }
-
-  function contentTypeFor(searchedType) {
-    for (var i = 0; i < types.length; i += 1) {
-      if (types[i][0] === searchedType) {
-        return types[i][1][0];
-      }
-    }
-  }
-
-  function bestMatchForAcceptHeader(header) {
-    var requestedMimes = parseAcceptHeader(header);
-    var relevantTypes = getRelevantTypes();
-    for (var i = 0; i < requestedMimes.length; i += 1) {
-      var requestedMime = requestedMimes[i];
-      var requestedParts = requestedMime.split(";")[0].trim().split("/");
-
-      for (var j = 0; j < relevantTypes.length; j += 1) {
-        var type = relevantTypes[j][0];
-        var mimes = relevantTypes[j][1];
-
-        for (var k = 0; k < mimes.length; k += 1) {
-          var mime = mimes[k];
-
-          var availableParts = mime.split(";")[0].trim().split("/");
-          var match = (
-            (
-              //'text' in text/plain
-              requestedParts[0] === availableParts[0] ||
-              requestedParts[0] === "*" || availableParts[0] === "*"
-            ) && (
-              //'plain' in text/plain
-              requestedParts[1] === availableParts[1] ||
-              requestedParts[1] === "*" || availableParts[1] === "*"
-            )
-          );
-          if (match) {
-            return [type, mime];
-          }
-        }
-      }
-    }
-    //no match was found
-    throw new PouchPluginError({
-      status: 406,
-      name: "not_acceptable",
-      message: [
-        "Content-Type(s)",
-        requestedMimes.join(", "),
-        "not supported, try one of:",
-        Object.keys(providesFuncs).map(contentTypeFor)
-      ].join(" ")
-    });
-  }
-
-  function provides(type, func) {
-    providesFuncs[type] = func;
-  }
-
-  function getResult(req) {
-    if (isEmpty(providesFuncs)) {
-      return [""];
-    }
-    if (req.query.format) {
-      if (!providesFuncs.hasOwnProperty(req.query.format)) {
-        throw new PouchPluginError({
-          status: 500,
-          name: "render_error",
-          message: [
-            "the format option is set to '",
-            req.query.format,
-            //the + thing for es3ify
-            "'" + ", but there's no provider registered for that format."
-          ].join("")
-        });
-      }
-      //everything fine
-      return [execute(req.query.format), contentTypeFor(req.query.format)];
-    }
-    var chosenType = bestMatchForAcceptHeader(req.headers.Accept);
-    return [execute(chosenType[0]), chosenType[1]];
-  }
-
-  return {
-    api: {
-      provides: provides,
-      registerType: registerType
-    },
-    getResult: getResult
-  };
+    return JSON.parse(result);
+  }, null));
 }
 
-function parseAcceptHeader(header) {
-  return header.split(",").map(function (part) {
-    return part.split(";")[0].trim();
-  });
-}
-
-},{"couchdb-eval":3,"couchdb-resp-completer":4,"extend":6,"is-empty":5,"pouchdb-plugin-error":7}],3:[function(_dereq_,module,exports){
+},{"couchdb-eval":2,"extend":3,"pouchdb-plugin-error":4}],2:[function(_dereq_,module,exports){
 /*
 	Copyright 2013-2014, Marten de Vries
 
@@ -423,117 +224,7 @@ exports.wrapExecutionError = function (e) {
   });
 };
 
-},{"extend":6,"pouchdb-plugin-error":7}],4:[function(_dereq_,module,exports){
-/*
-  Copyright 2013-2014, Marten de Vries
-
-  Licensed under the Apache License, Version 2.0 (the "License");
-  you may not use this file except in compliance with the License.
-  You may obtain a copy of the License at
-
-  http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing, software
-  distributed under the License is distributed on an "AS IS" BASIS,
-  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  See the License for the specific language governing permissions and
-  limitations under the License.
-*/
-
-"use strict";
-
-var extend = _dereq_("extend");
-var isEmpty = _dereq_("is-empty");
-var PouchPluginError = _dereq_("pouchdb-plugin-error");
-
-module.exports = function completeRespObj(resp, contentType) {
-  //contentType may be undefined (if unknown). Resp may be anything
-  //returned by the user as response.
-
-  if (typeof resp === "string") {
-    resp = {body: resp};
-  }
-  if (Object.prototype.toString.call(resp) !== "[object Object]") {
-    resp = {};
-  }
-  //check for keys that shouldn't be in the resp object
-  var copy = extend({}, resp);
-  delete copy.code;
-  delete copy.json;
-  delete copy.body;
-  delete copy.base64;
-  delete copy.headers;
-  delete copy.stop;
-  if (!isEmpty(copy)) {
-    var key = Object.keys(copy)[0];
-    throw new PouchPluginError({
-      "status": 500,
-      "name": "external_response_error",
-      "message": [
-        "Invalid data from external server: {<<",
-        JSON.stringify(key),
-        ">>,<<",
-        JSON.stringify(copy[key]),
-        ">>}"
-      ].join("")
-    });
-  }
-  resp.code = resp.code || 200;
-  resp.headers = resp.headers || {};
-  resp.headers.Vary = resp.headers.Vary || "Accept";
-  //if a content type is known by now, use it.
-  resp.headers["Content-Type"] = resp.headers["Content-Type"] || contentType;
-  if (typeof resp.json !== 'undefined') {
-    resp.body = JSON.stringify(resp.json);
-    resp.headers["Content-Type"] = resp.headers["Content-Type"] || "application/json";
-  }
-  if (typeof resp.base64 !== 'undefined') {
-    resp.headers["Content-Type"] = resp.headers["Content-Type"] || "application/binary";
-  }
-  //the default content type
-  resp.headers["Content-Type"] = resp.headers["Content-Type"] || "text/html; charset=utf-8";
-
-  //the user isn't allowed to set the etag header
-  delete resp.headers.Etag;
-
-  if (typeof resp.body === "undefined" && typeof resp.base64 === "undefined") {
-    resp.body = "";
-  }
-
-  return resp;
-};
-
-},{"extend":6,"is-empty":5,"pouchdb-plugin-error":7}],5:[function(_dereq_,module,exports){
-
-/**
- * Expose `isEmpty`.
- */
-
-module.exports = isEmpty;
-
-
-/**
- * Has.
- */
-
-var has = Object.prototype.hasOwnProperty;
-
-
-/**
- * Test whether a value is "empty".
- *
- * @param {Mixed} val
- * @return {Boolean}
- */
-
-function isEmpty (val) {
-  if (null == val) return true;
-  if ('number' == typeof val) return 0 === val;
-  if (undefined !== val.length) return 0 === val.length;
-  for (var key in val) if (has.call(val, key)) return false;
-  return true;
-}
-},{}],6:[function(_dereq_,module,exports){
+},{"extend":3,"pouchdb-plugin-error":4}],3:[function(_dereq_,module,exports){
 var hasOwn = Object.prototype.hasOwnProperty;
 var toString = Object.prototype.toString;
 var undefined;
@@ -615,7 +306,7 @@ module.exports = function extend() {
 };
 
 
-},{}],7:[function(_dereq_,module,exports){
+},{}],4:[function(_dereq_,module,exports){
 /*
   Copyright 2014, Marten de Vries
 

@@ -17,7 +17,7 @@
 "use strict";
 
 var extend = require("extend");
-var render = require("couchdb-render");
+var coucheval = require("couchdb-eval");
 var PouchPluginError = require("pouchdb-plugin-error");
 
 exports.list = function (listPath, options, callback) {
@@ -80,18 +80,14 @@ function offlineQuery(db, designDocName, listName, viewName, options) {
     return args;
 
   }).then(Function.prototype.apply.bind(function (viewResp, info, designDoc) {
-    var head = {
-      offset: viewResp.offset,
-      total_rows: viewResp.total_rows,
-      update_seq: info.update_seq
-    };
-
     var respInfo;
     var chunks = [];
+    var result;
+    var rows = viewResp.rows;
 
     var listApi = {
       getRow: function () {
-        return viewResp.rows.shift() || null;
+        return rows.shift() || null;
       },
       send: function (chunk) {
         listApi.start({});
@@ -104,19 +100,13 @@ function offlineQuery(db, designDocName, listName, viewName, options) {
       }
     };
 
-     // fake request object
-    var req = {
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      },
-      query: {}
-    };
-    var resp = render(designDoc.lists[listName], designDoc, head, req, listApi);
-    if (respInfo) {
-      extend(resp, respInfo);
-      resp.body = chunks.join("") + resp.body;
-      resp.headers["Transfer-Encoding"] = "chunked";
+    var func = coucheval.evaluate(designDoc, listApi, designDoc.lists[listName]);
+    try {
+      result = func.call(designDoc);
+    } catch (e) {
+      throw coucheval.wrapExecutionError(e);
     }
-    return resp;
+
+    return JSON.parse(result);
   }, null));
 }
