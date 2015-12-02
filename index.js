@@ -17,12 +17,7 @@
 "use strict";
 
 var extend = require("extend");
-var nodify = require("promise-nodify");
-var Promise = require("pouchdb-promise");
-
-var couchdb_objects = require("couchdb-objects");
 var render = require("couchdb-render");
-var httpQuery = require("pouchdb-req-http-query");
 var PouchPluginError = require("pouchdb-plugin-error");
 
 exports.list = function (listPath, options, callback) {
@@ -43,29 +38,18 @@ exports.list = function (listPath, options, callback) {
   if (viewName) {
     pathEnd.push(viewName);
   }
-  var reqPromise = couchdb_objects.buildRequestObject(db, pathEnd, options);
-  var promise = reqPromise.then(function (req) {
-    if (["http", "https"].indexOf(db.type()) === -1) {
-      return offlineQuery(db, designDocName, listName, viewName, req, options);
-    } else {
-      return httpQuery(db, req);
-    }
-  });
-  nodify(promise, callback);
-  return promise;
+
+  if (["http", "https"].indexOf(db.type()) === -1) {
+    return offlineQuery(db, designDocName, listName, viewName, options);
+  } else {
+    return db.request({
+      method: 'GET',
+      url: pathEnd.join('/')
+    });
+  }
 };
 
-function offlineQuery(db, designDocName, listName, viewName, req, options) {
-  var notJSON = req.headers["Content-Type"] && req.headers["Content-Type"] !== "application/json";
-  var hasBody = req.body && req.body !== "undefined";
-  if (notJSON && hasBody) {
-    return Promise.reject(new PouchPluginError({
-      status: 400,
-      name: "bad_request",
-      message: "invalid_json"
-    }));
-  }
-
+function offlineQuery(db, designDocName, listName, viewName, options) {
   //get the data involved.
   var ddocPromise = db.get("_design/" + designDocName).then(function (designDoc) {
     if (!(designDoc.lists || {}).hasOwnProperty(listName)) {
@@ -78,9 +62,6 @@ function offlineQuery(db, designDocName, listName, viewName, req, options) {
     return designDoc;
   });
   var viewOpts = extend({}, options.query);
-  if (req.method !== 'GET') {
-    extend(viewOpts, options.json);
-  }
   var viewPromise = db.query(designDocName + "/" + viewName, viewOpts);
 
   //not Promise.all because the error order matters.
@@ -123,6 +104,13 @@ function offlineQuery(db, designDocName, listName, viewName, req, options) {
       }
     };
 
+     // fake request object
+    var req = {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      query: {}
+    };
     var resp = render(designDoc.lists[listName], designDoc, head, req, listApi);
     if (respInfo) {
       extend(resp, respInfo);
